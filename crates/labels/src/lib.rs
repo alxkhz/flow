@@ -78,10 +78,11 @@ pub fn range(set: &LabelSet, name: &str) -> std::ops::Range<usize> {
 }
 
 /// Build a LabelSet from the input iterator of label names and values.
-pub fn build_set<I, S>(it: I) -> LabelSet
+pub fn build_set<I, S1, S2>(it: I) -> LabelSet
 where
-    I: IntoIterator<Item = (S, S)>,
-    S: AsRef<str>,
+    I: IntoIterator<Item = (S1, S2)>,
+    S1: AsRef<str>,
+    S2: AsRef<str>,
 {
     let mut labels: Vec<Label> = it
         .into_iter()

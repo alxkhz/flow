@@ -4,7 +4,7 @@ use proto_flow::flow;
 /// Build a flow::UuidParts from a Producer, Clock, and Flags.
 pub fn build_uuid_parts(p: Producer, c: Clock, f: Flags) -> flow::UuidParts {
     flow::UuidParts {
-        clock: c.0,
+        clock: c.to_g1582_ns100(),
         node: (p.0[0] as u64) << 56
             | (p.0[1] as u64) << 48
             | (p.0[2] as u64) << 40
@@ -25,7 +25,8 @@ mod test {
         let (producer, clock, flags) = gazette::uuid::parse(u1).unwrap();
 
         assert_eq!(producer.as_bytes(), &[8, 6, 7, 5, 3, 9]);
-        assert_eq!(clock.0, 0x1eac6a39f2952f32);
+        assert_eq!(clock.to_g1582_ns100(), 0x1eac6a39f2952f32);
+        assert_eq!(clock.to_unix(), (0, 0));
         assert_eq!(flags.0, 0x02);
 
         let u2 = gazette::uuid::build(producer, clock, flags);

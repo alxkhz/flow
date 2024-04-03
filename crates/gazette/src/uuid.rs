@@ -9,7 +9,7 @@ pub struct Producer(pub [u8; 6]);
 /// and each Tick increments the Clock. For UUID generation, Clock provides a
 /// total ordering over UUIDs of a given Producer.
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq)]
-pub struct Clock(pub u64);
+pub struct Clock(u64);
 
 // Flags are the 10 least-significant bits of the v1 UUID clock sequence,
 // which Gazette employs for representing message transaction semantics.
@@ -84,7 +84,18 @@ impl Clock {
         std::time::UNIX_EPOCH + unix
     }
 
+    #[inline]
+    pub fn to_g1582_ns100(&self) -> u64 {
+        self.0
+    }
+
     pub const UNIX_EPOCH: Self = Clock::from_unix(0, 0);
+}
+
+impl Default for Clock {
+    fn default() -> Self {
+        Self::UNIX_EPOCH
+    }
 }
 
 impl Flags {
@@ -99,10 +110,9 @@ impl Flags {
 const G1582NS100: u64 = 122_192_928_000_000_000;
 
 /// Parse a v1 UUID into its Producer, Clock, and Flags.
-/// If it's not a V1 UUID then `parse` returns None.
-pub fn parse(u: uuid::Uuid) -> Option<(Producer, Clock, Flags)> {
+pub fn parse(u: uuid::Uuid) -> crate::Result<(Producer, Clock, Flags)> {
     if u.get_version_num() != 1 {
-        return None;
+        return Err(crate::Error::UUIDNotV1(u));
     }
     let (c_low, c_mid, c_high, seq_node_id) = u.as_fields();
 
@@ -117,13 +127,12 @@ pub fn parse(u: uuid::Uuid) -> Option<(Producer, Clock, Flags)> {
     let flags = ((seq_node_id[0] as u16) & 0x3) << 8 // High 2 bits of flags.
             | (seq_node_id[1] as u16); // Low 8 bits of flags.
 
-    Some((Producer(producer), Clock(clock), Flags(flags)))
+    Ok((Producer(producer), Clock(clock), Flags(flags)))
 }
 
 /// Parse a v1 UUID string into its Producer, Clock, and Flags.
-/// If it's not a V1 UUID then `parse_str` returns None.
-pub fn parse_str(s: &str) -> Option<(Producer, Clock, Flags)> {
-    uuid::Uuid::parse_str(s).ok().and_then(parse)
+pub fn parse_str(s: &str) -> crate::Result<(Producer, Clock, Flags)> {
+    parse(uuid::Uuid::parse_str(s).map_err(|err| crate::Error::UUIDParse(s.to_string(), err))?)
 }
 
 /// Build a V1 UUID from a Producer, Clock, and Flags.
@@ -158,6 +167,10 @@ mod test {
     fn test_clock_lifecycle() {
         let mut c = Clock::UNIX_EPOCH;
         assert_eq!(c.0, 0x1b21dd2138140000);
+        assert_eq!(c.to_unix(), (0, 0));
+
+        // UNIX_EPOCH is Clock's default.
+        assert_eq!(Clock::default().to_unix(), (0, 0));
 
         // Each tick increments the clock.
         c.tick();
@@ -169,6 +182,8 @@ mod test {
         assert_eq!(c.0, 0x1b21dd2197721000);
         c.update(Clock::from_unix(5, 0));
         assert_eq!(c.0, 0x1b21dd2197721000); // Not changed.
+
+        assert_eq!(c.to_unix(), (10, 0));
     }
 
     #[test]
@@ -183,6 +198,8 @@ mod test {
         // and includes clock sequence increments.
         let mut c_in = Clock::UNIX_EPOCH;
         c_in.update(Clock::from_unix(SECONDS, NANOS));
+        assert_eq!(c_in.to_unix(), (SECONDS, 981273700)); // Rounded to 100's of nanos.
+
         c_in.tick();
         c_in.tick();
 
@@ -205,5 +222,17 @@ mod test {
         assert_eq!(p_in, p_out);
         assert_eq!(c_in, c_out);
         assert_eq!(Flags(FLAGS), f_out);
+    }
+
+    #[test]
+    fn test_uuid_parse_errors() {
+        let err = parse_str("not-a-uuid").unwrap_err();
+        assert!(matches!(
+            err,
+            crate::Error::UUIDParse(s, _) if s == "not-a-uuid"
+        ));
+
+        let err = parse(::uuid::Uuid::new_v4()).unwrap_err();
+        assert!(matches!(err, crate::Error::UUIDNotV1(_)));
     }
 }

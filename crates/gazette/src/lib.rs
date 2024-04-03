@@ -29,6 +29,10 @@ pub enum Error {
     Parsing(i64, #[source] std::io::Error),
     #[error("{0}")]
     Protocol(&'static str),
+    #[error("failed to parse document UUID {0:?}")]
+    UUIDParse(String, #[source] ::uuid::Error),
+    #[error("UUID {0} is not a V1 UUID")]
+    UUIDNotV1(::uuid::Uuid),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
