@@ -9,22 +9,33 @@ Apply this test schema as:
 
 */
 
+DROP SECRET IF EXISTS estuary_token CASCADE;
 
-DROP SECRET IF EXISTS kafka_password CASCADE;
-
-CREATE SECRET kafka_password AS '...';
+CREATE SECRET estuary_token AS
+  '...';
 
 CREATE CONNECTION kafka_connection TO KAFKA (
     BROKER 'localhost',
     SECURITY PROTOCOL = 'SASL_PLAINTEXT',
     SASL MECHANISMS = 'PLAIN',
     SASL USERNAME = 'dev-user',
-    SASL PASSWORD = SECRET kafka_password
+    SASL PASSWORD = SECRET estuary_token
+);
+
+CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
+    URL 'http://localhost:9093',
+    USERNAME = 'dev-user',
+    PASSWORD = SECRET estuary_token
 );
 
 CREATE SOURCE my_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'demo/wikipedia/recentchange-sampled')
-  FORMAT JSON;
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  INCLUDE OFFSET, TIMESTAMP
+  ENVELOPE UPSERT
+  ;
 
+/*
 CREATE VIEW my_view AS
   SELECT distinct data->>'user'::text FROM my_source;
+*/

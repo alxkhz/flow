@@ -4,14 +4,94 @@ use futures::{FutureExt, TryStreamExt};
 use tokio::io::AsyncWriteExt;
 use tracing_subscriber::{filter::LevelFilter, EnvFilter};
 
-// on auth:
-// - map refresh token to access token
-// - refresh auth roles & collections but don't fetch partitions
+async fn example_avro_schema_key() -> axum::Json<serde_json::Value> {
+    let raw = serde_json::json!({
+      "type": "record",
+      "name": "test",
+      "fields" : [
+        {"name": "ak", "type": "long"},
+        {"name": "bk", "type": "string"}
+      ]
+    })
+    .to_string();
 
-// - on metadata
-//   - if refresh time is > $interval, then refresh collections & auth roles.
-//   - if partition count is 0, fetch partitions and store
-//     as needed, obtain a DPG token for a covering auth role
+    serde_json::json!({
+        "schema": raw
+    })
+    .into()
+}
+
+async fn example_avro_schema_value() -> axum::Json<serde_json::Value> {
+    let raw = serde_json::json!({
+      "type": "record",
+      "name": "test",
+      "fields" : [
+        {"name": "aaa", "type": "long"},
+        {"name": "bbb", "type": "string"}
+      ]
+    })
+    .to_string();
+
+    serde_json::json!({
+        "schema": raw
+    })
+    .into()
+}
+
+async fn example_subjects(
+    axum::TypedHeader(basic_auth): axum::TypedHeader<
+        axum::headers::Authorization<axum::headers::authorization::Basic>,
+    >,
+) -> axum::Json<serde_json::Value> {
+    let token = basic_auth.password();
+
+    tracing::info!(?basic_auth, "GOT BASIC AUTH");
+
+    // These appear to be collection names.
+    serde_json::json!(["demo/wikipedia/recentchange-sampled"]).into()
+}
+
+async fn example_subjects_latest_key() -> axum::Json<serde_json::Value> {
+    let raw = serde_json::json!({
+      "type": "record",
+      "name": "test",
+      "fields" : [
+        {"name": "ak", "type": "long"},
+        {"name": "bk", "type": "string"}
+      ]
+    })
+    .to_string();
+
+    serde_json::json!({
+        "id": 843207265,
+        "schema": raw,
+        "schemaType": "AVRO",
+        "subject": "demo/wikipedia/recentchange-sampled-key",
+        "version": 1,
+    })
+    .into()
+}
+
+async fn example_subjects_latest_value() -> axum::Json<serde_json::Value> {
+    let raw = serde_json::json!({
+      "type": "record",
+      "name": "test",
+      "fields" : [
+        {"name": "aaa", "type": "long"},
+        {"name": "bbb", "type": "string"}
+      ]
+    })
+    .to_string();
+
+    serde_json::json!({
+        "id": 843207266,
+        "schema": raw,
+        "schemaType": "AVRO",
+        "subject": "demo/wikipedia/recentchange-sampled-value",
+        "version": 1,
+    })
+    .into()
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -33,22 +113,50 @@ async fn main() -> anyhow::Result<()> {
 
     let client = postgrest::Postgrest::new(PUBLIC_ENDPOINT).insert_header("apikey", PUBLIC_TOKEN);
 
-    let listener = tokio::net::TcpListener::bind(format!("[::]:{ADVERTISE_PORT}"))
+    let schema_router = axum::Router::new()
+        .route(
+            "/schemas/ids/843207265",
+            axum::routing::get(example_avro_schema_key),
+        )
+        .route(
+            "/schemas/ids/843207266",
+            axum::routing::get(example_avro_schema_value),
+        )
+        .route("/subjects", axum::routing::get(example_subjects))
+        .route(
+            "/subjects/demo%2Fwikipedia%2Frecentchange-sampled-key/versions/latest",
+            axum::routing::get(example_subjects_latest_key),
+        )
+        .route(
+            "/subjects/demo%2Fwikipedia%2Frecentchange-sampled-value/versions/latest",
+            axum::routing::get(example_subjects_latest_value),
+        )
+        .layer(tower_http::trace::TraceLayer::new_for_http());
+
+    let kafka_listener = tokio::net::TcpListener::bind(format!("[::]:{ADVERTISE_KAFKA_PORT}"))
         .await
         .context("failed to bind server port")?;
-    tracing::info!(ADVERTISE_PORT, "now listening");
+    let schema_listener = std::net::TcpListener::bind(format!("[::]:{ADVERTISE_SCHEMA_PORT}"))
+        .context("failed to bind server port")?;
+
+    tracing::info!(ADVERTISE_KAFKA_PORT, ADVERTISE_SCHEMA_PORT, "now listening");
+
+    let schema_task = axum::Server::from_tcp(schema_listener)
+        .unwrap()
+        .serve(schema_router.into_make_service());
+    tokio::spawn(async move { schema_task.await.unwrap() });
 
     loop {
         tokio::select! {
-            accept = listener.accept() => {
+            accept = kafka_listener.accept() => {
                 let (socket, addr) = accept?;
 
                 let session = Session::new(
                     client.clone(),
                     ADVERTISE_HOST.to_string(),
-                    ADVERTISE_PORT,
+                    ADVERTISE_KAFKA_PORT,
                 );
-                tokio::spawn(serve_connection(session, socket, addr, stop.clone()));
+                tokio::spawn(serve(session, socket, addr, stop.clone()));
             }
             _ = &mut stop => break,
         }
@@ -58,7 +166,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 #[tracing::instrument(level = "info", ret, err(level = "warn"), skip(dekaf, socket, _stop), fields(?addr))]
-async fn serve_connection(
+async fn serve(
     mut dekaf: Session,
     mut socket: tokio::net::TcpStream,
     addr: std::net::SocketAddr,
@@ -92,4 +200,5 @@ pub const PUBLIC_TOKEN: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJ
 pub const PUBLIC_ENDPOINT: &str = "https://eyrcnmuzzyriypdajwdk.supabase.co/rest/v1";
 
 pub const ADVERTISE_HOST: &str = "127.0.0.1";
-pub const ADVERTISE_PORT: u16 = 9092;
+pub const ADVERTISE_KAFKA_PORT: u16 = 9092;
+pub const ADVERTISE_SCHEMA_PORT: u16 = 9093;

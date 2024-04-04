@@ -131,6 +131,10 @@ pub async fn read_record_batch(
 
         target_bytes -= (key.len() + value.len()) as i32;
 
+        // TODO remove me -- for testing AVRO serialization & schemas.
+        let key = vec![0, 0x32, 0x42, 0x52, 0x61, 0x36, 0x06, 0x66, 0x6f, 0x6f];
+        let value = vec![0, 0x32, 0x42, 0x52, 0x62, 0x36, 0x06, 0x66, 0x6f, 0x6f];
+
         records.push(Record {
             control: false,
             headers: Default::default(),
